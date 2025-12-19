@@ -1,3 +1,4 @@
+#!/bin/bash
 set -Eeuo pipefail
 
 WORK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -22,6 +23,7 @@ kill_port_if_listening() {
 
 start_service() {
     cd "$WORK_DIR/medical-report-analyzer"
+    echo "Starting medical report analyzer on port ${DEPLOY_RUN_PORT}..."
     npm run start -- --port ${DEPLOY_RUN_PORT}
 }
 

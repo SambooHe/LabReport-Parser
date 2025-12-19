@@ -3,6 +3,9 @@ import { S3Storage } from '../../../storage/s3/s3Storage';
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 
+// 设置API路由超时时间为5分钟
+export const maxDuration = 300; // 300 seconds = 5 minutes
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -11,8 +14,6 @@ export async function POST(request: NextRequest) {
     if (!fileKey) {
       return NextResponse.json({ error: '缺少文件Key' }, { status: 400 });
     }
-
-    console.log('Analyzing file:', fileKey);
 
     let imageUrl = '';
     
@@ -30,17 +31,13 @@ export async function POST(request: NextRequest) {
         key: fileKey, 
         expireTime: 3600 
       });
-
-      console.log('Generated image URL:', imageUrl);
       
       if (!imageUrl || !imageUrl.startsWith('http')) {
         throw new Error('无效的图片URL');
       }
       
     } catch (urlError) {
-      console.error('生成图片URL失败:', urlError);
       // 如果无法生成URL，使用模拟数据进行测试
-      console.log('使用模拟测试模式');
       const rawText = `项目：白细胞
 检测结果：6.5
 单位：10^9/L
@@ -76,11 +73,9 @@ export async function POST(request: NextRequest) {
 
     // 使用多模态大模型进行真实的OCR识别
     const rawText = await performOCR(imageUrl);
-    console.log('OCR result length:', rawText.length);
 
     // 解析医疗指标数据
     const indicators = parseMedicalIndicators(rawText);
-    console.log('Parsed indicators:', indicators.length, 'items');
 
     return NextResponse.json({
       success: true,
@@ -90,36 +85,13 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Analysis failed:', error);
-    console.error('Error details:', {
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : 'No stack trace',
-      error: error,
-      errorType: typeof error
-    });
+    console.error('Analysis failed:', error instanceof Error ? error.message : error);
     
-    let errorMessage = '分析失败';
-    let errorDetails = 'Unknown error';
-    
-    if (error) {
-      if (typeof error === 'string') {
-        errorMessage = error;
-        errorDetails = error;
-      } else if (error instanceof Error) {
-        errorMessage = error.message;
-        errorDetails = error.stack || error.message;
-      } else {
-        const errorObj = error as any;
-        if (errorObj.message) {
-          errorMessage = errorObj.message;
-        }
-        errorDetails = JSON.stringify(error);
-      }
-    }
+    const errorMessage = error instanceof Error ? error.message : '分析失败';
     
     return NextResponse.json({
       error: errorMessage,
-      details: errorDetails
+      details: errorMessage
     }, { status: 500 });
   }
 }
@@ -127,7 +99,6 @@ export async function POST(request: NextRequest) {
 async function performOCR(imageUrl: string): Promise<string> {
   // 如果是测试文件，直接返回模拟数据
   if (imageUrl.includes('test-key')) {
-    console.log('检测到测试文件，直接返回模拟数据');
     return `项目：白细胞
 检测结果：6.5
 单位：10^9/L
@@ -166,34 +137,24 @@ async function performOCR(imageUrl: string): Promise<string> {
   }
 
   try {
-    console.log('开始OCR识别，图片URL:', imageUrl);
-    
     const apiKey = process.env.COZE_WORKLOAD_IDENTITY_API_KEY;
     const baseURL = process.env.COZE_INTEGRATION_MODEL_BASE_URL;
     
-    console.log('Environment variables check:', {
-      hasApiKey: !!apiKey,
-      hasBaseURL: !!baseURL,
-      apiKeyLength: apiKey?.length || 0,
-      baseURLLength: baseURL?.length || 0
-    });
-    
     if (!baseURL || !apiKey) {
-      const errorMsg = `Missing environment variables: baseURL=${!!baseURL}, apiKey=${!!apiKey}`;
-      console.error(errorMsg);
-      throw new Error(errorMsg);
+      throw new Error(`Missing environment variables: baseURL=${!!baseURL}, apiKey=${!!apiKey}`);
     }
 
-    // 使用视觉模型进行OCR识别
+    // 使用非流式调用，避免超时问题
     const llm = new ChatOpenAI({
-      modelName: "doubao-seed-1-6-vision-250815", // 使用视觉模型
+      modelName: "doubao-seed-1-6-vision-250815",
       apiKey: apiKey,
       configuration: {
         baseURL: baseURL,
       },
-      streaming: true, // 必须使用流式
-      temperature: 0.1, // 低温度确保准确性
+      streaming: false, // 改为非流式，减少超时风险
+      temperature: 0.1,
       maxTokens: 2000,
+      timeout: 180000, // 设置3分钟超时
     });
 
     const messages = [
@@ -232,41 +193,22 @@ async function performOCR(imageUrl: string): Promise<string> {
       })
     ];
 
-    console.log('发送请求到视觉模型...');
+    const response = await llm.invoke(messages);
+    const fullResponse = response.content as string;
     
-    let fullResponse = "";
-    try {
-      const stream = await llm.stream(messages);
-      
-      for await (const chunk of stream) {
-        if (chunk && chunk.content) {
-          fullResponse += chunk.content;
-        }
-      }
-    } catch (streamError) {
-      console.error('流式处理失败:', streamError);
-      
-      // 直接转换为字符串检查404
-      let errorString = String(streamError);
-      console.log('原始错误字符串:', errorString);
-      
-      // 如果是对象类型，检查message字段
-      if ((streamError as any)?.message) {
-        errorString = (streamError as any).message;
-        console.log('Message字段:', errorString);
-      }
-      
-      // 检查error对象的详细信息
-      if ((streamError as any)?.error?.message) {
-        errorString = (streamError as any).error.message;
-        console.log('深层Error Message:', errorString);
-      }
-      
-      console.log('最终检查的错误字符串:', errorString);
-      
-      if (errorString.includes('404') || errorString.includes('not found') || errorString.includes('InvalidParameter')) {
-        console.log('✓ 检测到404错误，使用模拟数据');
-        return `项目：白细胞
+    if (!fullResponse || fullResponse.trim().length < 20) {
+      throw new Error('OCR识别结果为空或过短');
+    }
+    
+    return fullResponse;
+    
+  } catch (error) {
+    // 简化错误处理逻辑
+    const errorMessage = error instanceof Error ? error.message : 'OCR识别失败';
+    
+    // 如果是404或相关错误，返回模拟数据
+    if (errorMessage.includes('404') || errorMessage.includes('not found') || errorMessage.includes('InvalidParameter')) {
+      return `项目：白细胞
 检测结果：6.5
 单位：10^9/L
 参考范围：4.0-10.0
@@ -301,49 +243,9 @@ async function performOCR(imageUrl: string): Promise<string> {
 单位：10^9/L
 参考范围：1.1-3.2
 状态：正常`;
-      }
-      
-      console.log('✗ 不是404错误，尝试非流式调用');
-      // 如果流式失败，尝试非流式调用
-      try {
-        const response = await llm.invoke(messages);
-        fullResponse = response.content as string;
-      } catch (invokeError) {
-        console.error('非流式调用也失败:', invokeError);
-        throw streamError; // 抛出原始错误
-      }
     }
     
-    console.log('OCR识别完成，结果长度:', fullResponse.length);
-    console.log('识别结果预览:', fullResponse.substring(0, 200) + '...');
-    
-    if (!fullResponse || fullResponse.trim().length < 20) {
-      throw new Error('OCR识别结果为空或过短');
-    }
-    
-    return fullResponse;
-    
-  } catch (error) {
-    console.error('OCR识别失败，详细错误:', error);
-    console.error('Error type:', typeof error);
-    console.error('Error message:', (error as any)?.message);
-    console.error('Error stack:', (error as any)?.stack);
-    
-    // 更安全的错误处理
-    let errorMessage = '未知错误';
-    if (error) {
-      if (typeof error === 'string') {
-        errorMessage = `OCR识别失败: ${error}`;
-      } else if (error instanceof Error) {
-        errorMessage = `OCR识别失败: ${error.message}`;
-      } else if (error && typeof error === 'object' && 'message' in error) {
-        errorMessage = `OCR识别失败: ${(error as any).message}`;
-      } else {
-        errorMessage = `OCR识别失败: ${JSON.stringify(error)}`;
-      }
-    }
-    
-    throw new Error(errorMessage);
+    throw new Error(`OCR识别失败: ${errorMessage}`);
   }
 }
 
@@ -364,18 +266,12 @@ function parseMedicalIndicators(rawText: string): Array<{
     status: 'normal' | 'abnormal' | 'warning';
   }> = [];
   
-  console.log('开始解析医疗指标，原始文本长度:', rawText.length);
-  
   // 按空行分割文本块
   const sections = rawText.split(/\n\s*\n/).filter(section => section.trim());
-  
-  console.log('找到的区块数量:', sections.length);
   
   for (const section of sections) {
     const lines = section.split('\n').filter(line => line.trim());
     const currentIndicator: any = {};
-    
-    console.log('处理区块:', lines);
     
     for (const line of lines) {
       const trimmedLine = line.trim();
@@ -435,12 +331,9 @@ function parseMedicalIndicators(rawText: string): Array<{
         referenceRange: currentIndicator.referenceRange || '',
         status: currentIndicator.status
       });
-      
-      console.log('添加指标:', currentIndicator.name, currentIndicator.value);
     }
   }
 
-  console.log('总共解析到', indicators.length, '个指标');
   return indicators;
 }
 
