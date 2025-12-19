@@ -2,8 +2,6 @@
 
 import { useState } from 'react';
 import { MedicalIndicator, AnalyzedResult } from '@/types/medical';
-import { uploadMedicalReport, generateImageUrl } from '@/services/upload';
-import { extractMedicalData, parseMedicalIndicators } from '@/services/ocr';
 import { exportToExcel } from '@/services/excel';
 
 export default function Home() {
@@ -68,22 +66,31 @@ export default function Home() {
       setIsAnalyzing(true);
       setIsUploading(false);
       
-      // 获取图片URL用于OCR分析
-      const imageUrl = uploadResult.fileUrl;
-      
-      // OCR识别
-      const rawText = await extractMedicalData(imageUrl);
-      
-      // 解析医疗指标数据
-      const indicators = parseMedicalIndicators(rawText);
+      // 调用分析API进行OCR识别
+      const analysisResponse = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          fileKey: uploadResult.fileKey
+        }),
+      });
+
+      if (!analysisResponse.ok) {
+        const error = await analysisResponse.text();
+        throw new Error(error);
+      }
+
+      const analysisResult = await analysisResponse.json();
       
       // 创建分析结果
       const newResult: AnalyzedResult = {
         id: Date.now().toString(),
         fileName: uploadResult.fileName,
         uploadedAt: new Date().toLocaleString('zh-CN'),
-        indicators: indicators,
-        rawText: rawText
+        indicators: analysisResult.indicators || [],
+        rawText: analysisResult.rawText || ''
       };
       
       setResults(prev => [newResult, ...prev]);
