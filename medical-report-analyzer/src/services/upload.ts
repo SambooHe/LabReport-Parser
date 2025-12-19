@@ -1,5 +1,11 @@
 import { S3Storage } from '../storage/s3/s3Storage';
 
+console.log('Initializing S3Storage with config:', {
+  endpointUrl: process.env.COZE_BUCKET_ENDPOINT_URL,
+  bucketName: process.env.COZE_BUCKET_NAME,
+  hasToken: !!process.env.COZE_WORKLOAD_IDENTITY_API_KEY
+});
+
 const storage = new S3Storage({
   endpointUrl: process.env.COZE_BUCKET_ENDPOINT_URL,
   accessKey: "",
@@ -14,19 +20,21 @@ export async function uploadMedicalReport(file: File): Promise<{
   fileUrl: string;
 }> {
   try {
-    // 生成唯一的文件名，保留原始扩展名
-    const fileExtension = file.name.split('.').pop() || '';
-    const uniqueId = generateUUID();
-    const fileName = `medical-report_${uniqueId}.${fileExtension}`;
+    // 生成更安全的文件名（只包含字母数字和下划线）
+    const timestamp = Date.now();
+    const randomStr = Math.random().toString(36).substring(2, 8);
+    const safeFileName = `medical_report_${timestamp}_${randomStr}`;
+    
+    console.log('Uploading file:', file.name, 'as:', safeFileName);
     
     // 将文件转换为Buffer
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
     
-    // 上传到对象存储
+    // 上传到对象存储（不包含扩展名，使用安全文件名）
     const fileKey = await storage.uploadFile({
       fileContent: buffer,
-      fileName: fileName,
+      fileName: safeFileName,
       contentType: file.type || 'application/octet-stream',
     });
 

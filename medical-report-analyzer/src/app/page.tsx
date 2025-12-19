@@ -48,15 +48,28 @@ export default function Home() {
     setIsUploading(true);
     
     try {
-      // 上传文件
-      const uploadResult = await uploadMedicalReport(file);
+      // 使用API路由上传文件
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(error);
+      }
+
+      const uploadResult = await response.json();
       
       // 开始分析
       setIsAnalyzing(true);
       setIsUploading(false);
       
       // 获取图片URL用于OCR分析
-      const imageUrl = await generateImageUrl(uploadResult.fileKey);
+      const imageUrl = uploadResult.fileUrl;
       
       // OCR识别
       const rawText = await extractMedicalData(imageUrl);
